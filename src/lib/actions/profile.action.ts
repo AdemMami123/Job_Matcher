@@ -244,9 +244,14 @@ export async function trackAnalysis(
   strengths?: string[],
   weaknesses?: string[]
 ): Promise<{ success: boolean; error?: string }> {
+  console.log(`Tracking analysis: ${jobTitle} - ${score}% - ${companyName || 'N/A'} - ${jobCategory || 'N/A'}`);
+  console.log('Strengths:', strengths);
+  console.log('Weaknesses:', weaknesses);
+  
   try {
     const user = await getCurrentUser();
     if (!user) {
+      console.log('trackAnalysis: No authenticated user found');
       return { success: false, error: "Not authenticated" };
     }
 
@@ -369,7 +374,16 @@ export async function trackAnalysis(
       },
       updatedAt: now.toISOString()
     });
-
+    
+    console.log('Analysis tracked successfully. Stats updated:', {
+      totalAnalyses: profile.stats.totalAnalyses + 1,
+      highestScore: highestScore,
+      averageScore: Math.round(averageScore * 10) / 10
+    });
+    
+    // Revalidate the profile page to refresh the data
+    revalidatePath("/profile");
+    
     return { success: true };
   } catch (error) {
     console.error("Error tracking analysis:", error);

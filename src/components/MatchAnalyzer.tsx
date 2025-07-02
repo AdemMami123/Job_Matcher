@@ -55,28 +55,38 @@ export default function MatchAnalyzer() {
         setActiveTab('analysis') // Always start with analysis tab
         
         // Track this analysis in user stats with enhanced details
-        if (data.analysis.jobMatch && jobTitle) {
+        if (data.analysis && jobTitle) {
           // Extract strengths and weaknesses for tracking
           const strengths = [
-            ...(data.analysis.jobMatch.matchReasons?.skillsMatch >= 70 ? ['Strong skill match'] : []),
-            ...(data.analysis.jobMatch.matchReasons?.experienceMatch >= 70 ? ['Experience level match'] : []),
-            ...(data.analysis.jobMatch.pros || [])
+            ...(data.analysis.scores?.technicalSkills >= 70 ? ['Strong technical skills'] : []),
+            ...(data.analysis.scores?.experienceMatch >= 70 ? ['Strong experience match'] : []),
+            ...(data.analysis.strengths || [])
           ].slice(0, 5); // Take top 5 strengths
           
           const weaknesses = [
-            ...(data.analysis.jobMatch.matchReasons?.skillsMatch < 50 ? ['Skill gap'] : []),
-            ...(data.analysis.jobMatch.matchReasons?.experienceMatch < 50 ? ['Experience gap'] : []),
-            ...(data.analysis.jobMatch.cons || [])
+            ...(data.analysis.scores?.technicalSkills < 50 ? ['Technical skills gap'] : []),
+            ...(data.analysis.scores?.experienceMatch < 50 ? ['Experience gap'] : []),
+            ...(data.analysis.weaknesses || [])
           ].slice(0, 5); // Take top 5 weaknesses
           
-          await trackAnalysis(
-            jobTitle,
-            data.analysis.jobMatch.matchScore,
-            companyName,
-            jobCategory,
-            strengths,
-            weaknesses
-          );
+          try {
+            console.log('Calling trackAnalysis...');
+            const result = await trackAnalysis(
+              jobTitle,
+              data.analysis.overallMatch,
+              companyName,
+              jobCategory,
+              strengths,
+              weaknesses
+            );
+            console.log('trackAnalysis result:', result);
+            
+            if (!result.success) {
+              console.error('trackAnalysis failed:', result.error);
+            }
+          } catch (trackError) {
+            console.error('Error tracking analysis:', trackError);
+          }
         }
       } else {
         setError(data.error || 'Error analyzing resume')

@@ -143,7 +143,7 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
     
     try {
       const formData = new FormData()
-      formData.append('file', file)
+      formData.append('resume', file)
       
       const response = await fetch('/api/resume/upload', {
         method: 'POST',
@@ -152,11 +152,11 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
       
       const data = await response.json()
       
-      if (data.success && data.parsedContent) {
+      if (data.success && data.resumeText) {
         // Save the resume to user profile
         const saveResult = await saveResume({
           name: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
-          content: data.parsedContent,
+          content: data.resumeText,
           fileSize: file.size,
           fileName: file.name,
           isDefault: profile?.savedResumes.length === 0, // Make default if it's the first resume
@@ -720,6 +720,70 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
                       ))}
                     </tbody>
                   </table>
+                </div>
+                
+                {/* Analysis details sections (hidden by default) */}
+                <div className="space-y-4 mt-4">
+                  {profile.stats.analysesHistory.slice(-10).reverse().map((analysis, index) => (
+                    <div 
+                      key={index} 
+                      id={`analysis-details-${analysis.id || index}`}
+                      className="hidden gradient-card p-4 rounded-lg animate-fade-in"
+                    >
+                      <div className="flex justify-between mb-4">
+                        <div>
+                          <h4 className="text-lg font-medium">{analysis.jobTitle}</h4>
+                          <p className="text-sm text-slate-400">
+                            {analysis.companyName || 'N/A'} • {analysis.jobCategory || 'N/A'} • 
+                            Analyzed on {new Date(analysis.date).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="text-2xl font-semibold">
+                          <span 
+                            className={
+                              analysis.score >= 80 ? 'text-green-400' :
+                              analysis.score >= 60 ? 'text-yellow-400' :
+                              'text-red-400'
+                            }
+                          >
+                            {analysis.score}%
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <h5 className="text-sm font-medium text-green-400 mb-2">Strengths</h5>
+                          {analysis.strengths && analysis.strengths.length > 0 ? (
+                            <ul className="space-y-1">
+                              {analysis.strengths.map((strength, i) => (
+                                <li key={i} className="text-sm text-slate-300">
+                                  ✓ {strength}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-sm text-slate-400">No specific strengths recorded</p>
+                          )}
+                        </div>
+                        
+                        <div>
+                          <h5 className="text-sm font-medium text-red-400 mb-2">Areas to Improve</h5>
+                          {analysis.weaknesses && analysis.weaknesses.length > 0 ? (
+                            <ul className="space-y-1">
+                              {analysis.weaknesses.map((weakness, i) => (
+                                <li key={i} className="text-sm text-slate-300">
+                                  ✗ {weakness}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-sm text-slate-400">No specific weaknesses recorded</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
                 
                 {/* Detailed strengths and weaknesses */}
