@@ -158,7 +158,8 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
       }
       
       const formData = new FormData()
-      formData.append('resume', file)
+      // Ensure the field name matches what the server expects - "file" instead of "resume"
+      formData.append('file', file)
       
       console.log('Uploading file:', file.name, file.type, file.size);
       
@@ -173,21 +174,29 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
           throw new Error('Network response was not available');
         }
         
+        // Check response status first
+        if (!response.ok) {
+          // Try to get error details from response
+          let errorMessage = `Upload failed (${response.status})`;
+          try {
+            const errorData = await response.json();
+            if (errorData && errorData.error) {
+              errorMessage += `: ${errorData.error}`;
+            }
+          } catch (jsonError) {
+            // If we can't parse JSON, just use the status text
+            errorMessage += `: ${response.statusText}`;
+          }
+          throw new Error(errorMessage);
+        }
+        
+        // Parse successful response
         let data;
         try {
           data = await response.json();
         } catch (jsonError) {
           console.error('Error parsing JSON response:', jsonError);
           throw new Error('Invalid response format from server');
-        }
-        
-        if (!response.ok) {
-          console.error('Resume upload API error:', { status: response.status, data });
-          let errorMessage = `Upload failed (${response.status})`;
-          if (data && data.error) {
-            errorMessage += `: ${data.error}`;
-          }
-          throw new Error(errorMessage);
         }
         
         if (data.success && data.resumeText) {

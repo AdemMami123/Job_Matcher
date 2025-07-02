@@ -20,7 +20,7 @@ export default function ResumeUploader({ onResumeUploaded }: ResumeUploaderProps
     setError('')
     
     const formData = new FormData()
-    formData.append('resume', file)
+    formData.append('file', file)
 
     try {
       console.log('Uploading file:', file.name, file.type, file.size)

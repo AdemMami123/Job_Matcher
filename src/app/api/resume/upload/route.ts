@@ -1,31 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
-import { validateResumeContent } from '@/lib/resumeValidator'
 
-// Use dynamic import for pdf-parse to ensure it's only loaded at runtime
-// and doesn't cause issues during build time
-async function getPdfParser() {
-  try {
-    // Dynamic import that will only execute at runtime
-    const pdfParse = await import('pdf-parse').then(module => module.default);
-    return pdfParse;
-  } catch (error) {
-    console.warn('pdf-parse dynamic import failed:', error);
-    return null;
-  }
-}
+// Skip during build/prerender to avoid issues
+const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION;
+const isBuildPhase = process.env.NEXT_PHASE === 'phase-production-build' || 
+                     process.env.NEXT_PHASE === 'phase-export';
 
 export async function POST(request: NextRequest) {
   console.log('API route called: /api/resume/upload')
   
+  if (isBuildPhase) {
+    console.log('Build phase detected, returning mock response');
+    return NextResponse.json({
+      success: true,
+      resumeText: "This is a mock resume text for build phase",
+      filename: "mock-file.pdf"
+    });
+  }
+  
   try {
     console.log('Parsing form data...')
-    const formData = await request.formData().catch(err => {
-      console.error('Form data parsing error:', err);
-      return null;
-    });
+    let formData;
+    try {
+      formData = await request.formData();
+    } catch (formError) {
+      console.error('Form data parsing error:', formError);
+      return NextResponse.json({ 
+        success: false, 
+        error: 'Failed to parse form data' 
+      }, { status: 400 });
+    }
     
     if (!formData) {
       return NextResponse.json({ 
@@ -35,15 +41,16 @@ export async function POST(request: NextRequest) {
     }
     
     // Debug information
-    console.log('Form data keys:', [...formData.keys()]);
+    const formKeys = Array.from(formData.keys());
+    console.log('Form data keys:', formKeys);
     
-    const file = formData.get('resume') as File | null;
+    const file = formData.get('file') as File | null;
     
     if (!file) {
       console.log('No file found in form data');
       return NextResponse.json({ 
         success: false, 
-        error: 'No file uploaded. Make sure the form field is named "resume".' 
+        error: `No file uploaded. Make sure the form field is named "file". Available fields: ${formKeys.join(', ')}` 
       }, { status: 400 });
     }
 
@@ -51,163 +58,144 @@ export async function POST(request: NextRequest) {
       name: file.name,
       type: file.type,
       size: file.size
-    })
+    });
 
     // Validate file type
-    if (!file.type.includes('pdf') && !file.type.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document')) {
+    if (!file.type.includes('pdf')) {
       return NextResponse.json({ 
         success: false, 
-        error: 'Only PDF and DOCX files are supported' 
-      }, { status: 400 })
+        error: 'Only PDF files are supported' 
+      }, { status: 400 });
     }
 
     // Validate file size (10MB limit)
-    const maxSize = 10 * 1024 * 1024 // 10MB
+    const maxSize = 10 * 1024 * 1024; // 10MB
     if (file.size > maxSize) {
       return NextResponse.json({ 
         success: false, 
         error: 'File size must be less than 10MB' 
-      }, { status: 400 })
+      }, { status: 400 });
     }
 
     // Convert file to buffer
-    const bytes = await file.arrayBuffer()
-    const buffer = Buffer.from(bytes)
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
 
     // Create temporary file path and ensure directory exists
-    const tempDir = join(process.cwd(), 'temp')
+    const tempDir = join(process.cwd(), 'temp');
     
     // Ensure temp directory exists
     if (!existsSync(tempDir)) {
-      await mkdir(tempDir, { recursive: true })
-    }
-
-    const filePath = join(tempDir, `${Date.now()}-${file.name}`)
-
-    try {
-      let resumeText = ''
-
-      if (file.type.includes('pdf')) {
-        // Parse PDF directly from buffer using pdf-parse
-        console.log('Parsing PDF from buffer...')
-        try {
-          // For safety, use a direct import of pdf-parse
-          let pdfParse;
-          try {
-            pdfParse = (await import('pdf-parse')).default;
-          } catch (importError) {
-            console.error('Error importing pdf-parse:', importError);
-            return NextResponse.json({
-              success: false,
-              error: 'PDF parsing module could not be loaded'
-            }, { status: 500 });
-          }
-          
-          // Create a safe buffer copy
-          console.log('Creating buffer copy...');
-          const bufferCopy = Buffer.from(buffer);
-          
-          console.log('Starting PDF parsing...');
-          // Safe parsing with timeout
-          let pdfData;
-          try {
-            // Set timeout for PDF parsing (30 seconds max)
-            const timeout = setTimeout(() => {
-              throw new Error('PDF parsing timeout after 30 seconds');
-            }, 30000);
-            
-            pdfData = await pdfParse(bufferCopy);
-            
-            // Clear timeout if parsing completes
-            clearTimeout(timeout);
-          } catch (parseTimeoutError) {
-            console.error('PDF parsing timeout or error:', parseTimeoutError);
-            throw new Error('PDF parsing failed or timed out');
-          }
-          
-          if (!pdfData || typeof pdfData.text !== 'string') {
-            console.error('Invalid PDF data structure:', pdfData);
-            throw new Error('PDF parsing failed - invalid data structure returned');
-          }
-          
-          resumeText = pdfData.text;
-          console.log('PDF parsed successfully, text length:', resumeText.length)
-        } catch (pdfError) {
-          console.error('PDF parsing error:', pdfError)
-          return NextResponse.json({ 
-            success: false, 
-            error: `Failed to parse PDF: ${pdfError instanceof Error ? pdfError.message : 'Unknown PDF error'}` 
-          }, { status: 400 })
-        }
-      } else {
-        // For DOCX files, you might want to use a library like mammoth
-        // For now, we'll return an error for DOCX
-        return NextResponse.json({ 
-          success: false, 
-          error: 'DOCX parsing not yet implemented. Please use PDF format.' 
-        }, { status: 400 })
-      }
-
-      if (!resumeText.trim()) {
-        return NextResponse.json({ 
-          success: false, 
-          error: 'Could not extract text from the uploaded file. The PDF might be image-only or corrupted.' 
-        }, { status: 400 })
-      }
-
-      // For now, let's use a simpler validation approach to avoid errors
-      console.log('Validating document content with basic checks...')
       try {
-        // Skip AI validation for now to avoid potential errors
-        // Instead use a simple keyword check
-        const resumeKeywords = ['experience', 'education', 'skill', 'qualification', 'employment', 
-                               'job', 'work', 'position', 'resume', 'cv', 'curriculum', 'vitae', 'career'];
-        
-        const lowercaseText = resumeText.toLowerCase();
-        const matchingKeywords = resumeKeywords.filter(keyword => lowercaseText.includes(keyword));
-        
-        console.log(`Resume validation: Found ${matchingKeywords.length} resume keywords`);
-        
-        // Only reject if almost no keywords match (very unlikely to be a resume)
-        if (matchingKeywords.length < 2) {
-          return NextResponse.json({
-            success: false,
-            error: 'This document does not appear to be a resume or CV. Please upload a proper resume.',
-            details: {
-              foundKeywords: matchingKeywords,
-              missingKeywords: resumeKeywords.filter(k => !matchingKeywords.includes(k))
-            }
-          }, { status: 400 });
-        }
-      } catch (validationError) {
-        console.error('Resume validation error:', validationError);
-        // If validation fails, we'll allow the upload but log the error
-        console.log('Proceeding with upload despite validation error');
+        await mkdir(tempDir, { recursive: true });
+      } catch (mkdirError) {
+        console.error('Failed to create temp directory:', mkdirError);
+        // Continue without temp directory
       }
-
-      console.log('Resume upload and validation successful:', file.name)
-
-      return NextResponse.json({
-        success: true,
-        resumeText: resumeText.trim(),
-        filename: file.name
-      })
-
-    } catch (fileError) {
-      console.error('File processing error:', fileError)
-      throw fileError
     }
+
+    let resumeText = '';
+
+    // Safe PDF parsing with fallback mechanisms
+    try {
+      // Dynamically import pdf-parse only at runtime
+      const pdfParseModule = await import('pdf-parse').catch(importError => {
+        console.error('Failed to import pdf-parse:', importError);
+        throw new Error('PDF parsing module could not be loaded');
+      });
+      
+      const pdfParse = pdfParseModule.default;
+      
+      if (!pdfParse || typeof pdfParse !== 'function') {
+        throw new Error('PDF parser is not a function');
+      }
+      
+      console.log('Starting PDF parsing...');
+      
+      // Define type for PDF data
+      interface PDFData {
+        text: string;
+        numpages: number;
+        info: Record<string, any>;
+        metadata: Record<string, any>;
+        version: string;
+      }
+      
+      // Wrap PDF parsing in a timeout promise to prevent hanging
+      const parsePdfWithTimeout = async (buffer: Buffer, timeoutMs = 30000): Promise<PDFData> => {
+        return Promise.race([
+          pdfParse(buffer) as Promise<PDFData>,
+          new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error('PDF parsing timed out')), timeoutMs)
+          )
+        ]);
+      };
+      
+      // Parse with timeout
+      const pdfData = await parsePdfWithTimeout(buffer);
+      
+      if (!pdfData || typeof pdfData.text !== 'string') {
+        throw new Error('Invalid PDF structure or empty content');
+      }
+      
+      resumeText = pdfData.text;
+      console.log('PDF parsed successfully, text length:', resumeText.length);
+      
+      if (!resumeText.trim()) {
+        throw new Error('Extracted text is empty');
+      }
+    } catch (pdfError) {
+      console.error('PDF parsing error:', pdfError);
+      return NextResponse.json({ 
+        success: false, 
+        error: `Failed to parse PDF: ${pdfError instanceof Error ? pdfError.message : 'Unknown PDF error'}` 
+      }, { status: 400 });
+    }
+
+    // Simple resume validation to check if it's actually a resume
+    console.log('Validating document content with basic checks...');
+    const resumeKeywords = [
+      'experience', 'education', 'skill', 'qualification', 'employment', 
+      'job', 'work', 'position', 'resume', 'cv', 'curriculum', 'vitae', 
+      'career', 'professional', 'objective', 'summary', 'university', 
+      'degree', 'certification'
+    ];
+    
+    const lowercaseText = resumeText.toLowerCase();
+    const matchingKeywords = resumeKeywords.filter(keyword => lowercaseText.includes(keyword));
+    
+    console.log(`Resume validation: Found ${matchingKeywords.length} resume keywords`);
+    
+    // Only reject if almost no keywords match (very unlikely to be a resume)
+    if (matchingKeywords.length < 2) {
+      return NextResponse.json({
+        success: false,
+        error: 'This document does not appear to be a resume or CV. Please upload a proper resume.',
+        details: {
+          foundKeywords: matchingKeywords,
+          missingKeywords: resumeKeywords.filter(k => !matchingKeywords.includes(k))
+        }
+      }, { status: 400 });
+    }
+
+    console.log('Resume upload and validation successful:', file.name);
+
+    return NextResponse.json({
+      success: true,
+      resumeText: resumeText.trim(),
+      filename: file.name
+    });
 
   } catch (error) {
-    console.error('Error parsing resume:', error)
+    console.error('Error in resume upload API:', error);
     return NextResponse.json({ 
       success: false, 
-      error: `Failed to parse resume: ${error instanceof Error ? error.message : 'Unknown error'}` 
+      error: `Failed to process resume: ${error instanceof Error ? error.message : 'Unknown error'}` 
     }, { 
       status: 500,
       headers: {
         'Content-Type': 'application/json'
       }
-    })
+    });
   }
 }
