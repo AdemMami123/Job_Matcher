@@ -28,7 +28,12 @@ export default function Navbar({ user }: NavbarProps) {
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center">
-            <h1 className="text-xl font-bold text-gradient">Smart Job Matcher</h1>
+            <button 
+              onClick={() => router.push('/dashboard')} 
+              className="text-xl font-bold text-gradient hover:opacity-80 transition-opacity cursor-pointer"
+            >
+              Smart Job Matcher
+            </button>
           </div>
           
           <div className="flex items-center space-x-4">
