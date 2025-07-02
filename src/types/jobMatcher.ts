@@ -223,6 +223,8 @@ export interface SavedResume {
   fileSize: number;
   fileName: string;
   isDefault: boolean;
+  storageUrl?: string;
+  storagePath?: string;
 }
 
 export interface UserProfile {

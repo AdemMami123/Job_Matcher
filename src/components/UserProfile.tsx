@@ -1,8 +1,10 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { UserProfile, ProfileUpdatePayload, SavedResume } from '@/types/jobMatcher'
-import { updateUserProfile, saveResume, deleteResume, setDefaultResume } from '@/lib/actions/profile.action'
+import { UserProfile, ProfileUpdatePayload } from '@/types/jobMatcher'
+import { updateUserProfile } from '@/lib/actions/profile.action'
+import { auth } from '@/firebase/config'
+import { onAuthStateChanged, User } from 'firebase/auth'
 
 interface UserProfileProps {
   initialProfile: UserProfile | null
@@ -26,6 +28,17 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
   const [selectedTab, setSelectedTab] = useState('personal')
   const [skillInput, setSkillInput] = useState('')
   const [isInitialized, setIsInitialized] = useState(false)
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
+  
+  // Monitor auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      console.log('Auth state changed:', user ? user.uid : 'not authenticated')
+      setCurrentUser(user)
+    })
+    
+    return () => unsubscribe()
+  }, [])
   
   // Check if we need to fetch profile data
   useEffect(() => {
@@ -133,205 +146,36 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
     }
   }
 
-  // Handle file upload for resume
-  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    
-    setIsLoading(true)
-    setMessage({ text: '', type: '' })
-    
+  // Handle file upload for resume using Firebase Storage
+  // Test authentication function for debugging
+  const handleTestAuth = async () => {
     try {
-      // Validate file type first
-      if (!file.type.includes('pdf')) {
-        setMessage({ text: 'Only PDF files are supported', type: 'error' });
-        setIsLoading(false);
-        return;
+      if (!currentUser) {
+        setMessage({ text: 'No current user found', type: 'error' })
+        return
       }
       
-      // Validate file size
-      const maxSize = 5 * 1024 * 1024; // 5MB
-      if (file.size > maxSize) {
-        setMessage({ text: 'File size must be less than 5MB', type: 'error' });
-        setIsLoading(false);
-        return;
-      }
+      console.log('Testing authentication for user:', currentUser.uid)
+      const authToken = await currentUser.getIdToken(true)
       
-      const formData = new FormData()
-      // Ensure the field name matches what the server expects - "file" instead of "resume"
-      formData.append('file', file)
+      const response = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      })
       
-      console.log('Uploading file:', file.name, file.type, file.size);
-      
-      try {
-        const response = await fetch('/api/resume/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        // Handle network errors
-        if (!response) {
-          throw new Error('Network response was not available');
-        }
-        
-        // Check response status first
-        if (!response.ok) {
-          // Try to get error details from response
-          let errorMessage = `Upload failed (${response.status})`;
-          try {
-            const errorData = await response.json();
-            if (errorData && errorData.error) {
-              errorMessage += `: ${errorData.error}`;
-            }
-          } catch (jsonError) {
-            // If we can't parse JSON, just use the status text
-            errorMessage += `: ${response.statusText}`;
-          }
-          throw new Error(errorMessage);
-        }
-        
-        // Parse successful response
-        let data;
-        try {
-          data = await response.json();
-        } catch (jsonError) {
-          console.error('Error parsing JSON response:', jsonError);
-          throw new Error('Invalid response format from server');
-        }
-        
-        if (data.success && data.resumeText) {
-          console.log('Resume text extracted successfully, length:', data.resumeText.length);
-          
-          // Save the resume to user profile
-          try {
-            const saveResult = await saveResume({
-              name: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
-              content: data.resumeText,
-              fileSize: file.size,
-              fileName: file.name,
-              isDefault: profile?.savedResumes?.length === 0, // Make default if it's the first resume
-            });
-            
-            if (saveResult.success) {
-              // Refresh the profile data
-              try {
-                const profileResponse = await fetch('/api/user/profile');
-                const updatedProfile = await profileResponse.json();
-                if (updatedProfile.success) {
-                  setProfile(updatedProfile.profile);
-                  setMessage({ text: 'Resume uploaded and saved successfully!', type: 'success' });
-                } else {
-                  console.warn('Profile refresh failed after resume save:', updatedProfile);
-                  // Still show success since we did save the resume
-                  setMessage({ text: 'Resume uploaded successfully! Refresh to see changes.', type: 'success' });
-                }
-              } catch (profileError) {
-                console.error('Error refreshing profile after resume save:', profileError);
-                // Still show success since we did save the resume
-                setMessage({ text: 'Resume uploaded successfully! Refresh to see changes.', type: 'success' });
-              }
-            } else {
-              setMessage({ text: saveResult.error || 'Failed to save resume', type: 'error' });
-            }
-          } catch (saveError) {
-            console.error('Error in saveResume:', saveError);
-            setMessage({ text: saveError instanceof Error ? saveError.message : 'Failed to save resume to your profile', type: 'error' });
-          }
-        } else {
-          setMessage({ text: data.error || 'Failed to upload resume', type: 'error' });
-        }
-      } catch (error) {
-        console.error('Error uploading resume:', error);
-        const errorMessage = error instanceof Error ? `Error uploading resume: ${error.message}` : 'An error occurred while uploading your resume';
-        setMessage({ text: errorMessage, type: 'error' });
-        
-        // If the error is related to server connection, suggest checking internet connection
-        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
-          setMessage({ text: 'Network error. Please check your internet connection and try again.', type: 'error' });
-        }
-      }
-    } catch (error) {
-      console.error('Error in resume upload process:', error);
-      setMessage({ text: 'An error occurred while uploading your resume', type: 'error' });
-    } finally {
-      setIsLoading(false);
-      // Reset file input
-      e.target.value = '';
-    }
-  }
-
-  // Handle setting a resume as default
-  const handleSetDefaultResume = async (resumeId: string) => {
-    setIsLoading(true)
-    
-    try {
-      const result = await setDefaultResume(resumeId)
+      const result = await response.json()
+      console.log('Auth test result:', result)
       
       if (result.success) {
-        // Update local state
-        if (profile) {
-          const updatedResumes = profile.savedResumes.map(resume => ({
-            ...resume,
-            isDefault: resume.id === resumeId
-          }))
-          
-          setProfile({
-            ...profile,
-            savedResumes: updatedResumes,
-            preferences: {
-              ...profile.preferences,
-              defaultResumeId: resumeId
-            }
-          } as UserProfile)
-          
-          setMessage({ text: 'Default resume updated!', type: 'success' })
-        }
+        setMessage({ text: 'Authentication verified successfully!', type: 'success' })
       } else {
-        setMessage({ text: result.error || 'Failed to update default resume', type: 'error' })
+        setMessage({ text: `Auth test failed: ${result.error}`, type: 'error' })
       }
     } catch (error) {
-      console.error('Error setting default resume:', error)
-      setMessage({ text: 'An error occurred while updating your default resume', type: 'error' })
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  // Handle resume deletion
-  const handleDeleteResume = async (resumeId: string) => {
-    if (!confirm('Are you sure you want to delete this resume?')) return
-    
-    setIsLoading(true)
-    
-    try {
-      const result = await deleteResume(resumeId)
-      
-      if (result.success) {
-        // Update local state
-        if (profile) {
-          const updatedResumes = profile.savedResumes.filter(resume => resume.id !== resumeId)
-          
-          setProfile({
-            ...profile,
-            savedResumes: updatedResumes,
-            preferences: {
-              ...profile.preferences,
-              defaultResumeId: updatedResumes.length > 0 
-                ? (profile.preferences.defaultResumeId === resumeId ? updatedResumes[0].id : profile.preferences.defaultResumeId)
-                : undefined
-            }
-          } as UserProfile)
-          
-          setMessage({ text: 'Resume deleted successfully!', type: 'success' })
-        }
-      } else {
-        setMessage({ text: result.error || 'Failed to delete resume', type: 'error' })
-      }
-    } catch (error) {
-      console.error('Error deleting resume:', error)
-      setMessage({ text: 'An error occurred while deleting your resume', type: 'error' })
-    } finally {
-      setIsLoading(false)
+      console.error('Auth test error:', error)
+      setMessage({ text: 'Auth test failed with error', type: 'error' })
     }
   }
 
@@ -390,21 +234,11 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
               </button>
               
               <button 
-                onClick={() => setSelectedTab('resumes')}
-                className={`w-full text-left py-3 px-4 rounded-lg mb-2 flex items-center ${selectedTab === 'resumes' ? 'bg-slate-700/50 text-white' : 'hover:bg-slate-700/30 text-slate-400'}`}
-              >
-                <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                My Resumes
-              </button>
-              
-              <button 
                 onClick={() => setSelectedTab('stats')}
                 className={`w-full text-left py-3 px-4 rounded-lg mb-2 flex items-center ${selectedTab === 'stats' ? 'bg-slate-700/50 text-white' : 'hover:bg-slate-700/30 text-slate-400'}`}
               >
                 <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 012 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
                 Analytics
               </button>
@@ -643,81 +477,6 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
                     )}
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Resumes Tab */}
-        {selectedTab === 'resumes' && (
-          <div className="glass-card rounded-xl p-6 animate-fade-in">
-            <div className="mb-6">
-              <h2 className="text-2xl font-semibold mb-4">My Resumes</h2>
-              <p className="text-slate-400">Upload and manage your resumes. You can set one as your default for job applications.</p>
-            </div>
-
-            <div className="mb-8">
-              <label className="btn-secondary inline-flex items-center px-4 py-2 rounded-lg cursor-pointer">
-                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Upload New Resume
-                <input type="file" onChange={handleResumeUpload} accept=".pdf" className="hidden" />
-              </label>
-              <p className="mt-2 text-sm text-slate-400">Supported format: PDF (max 5MB)</p>
-            </div>
-
-            {profile.savedResumes.length === 0 ? (
-              <div className="text-center py-8">
-                <svg className="w-16 h-16 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-                </svg>
-                <p className="mt-4 text-slate-400">No resumes uploaded yet</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {profile.savedResumes.map((resume) => (
-                  <div key={resume.id} className="gradient-card rounded-lg p-4 flex flex-col md:flex-row justify-between items-start md:items-center">
-                    <div className="flex items-center mb-4 md:mb-0">
-                      <svg className="w-8 h-8 text-slate-400 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <div>
-                        <h3 className="font-medium text-white">{resume.name}</h3>
-                        <div className="text-xs text-slate-400">
-                          <span>Uploaded on {new Date(resume.dateUploaded).toLocaleDateString()}</span>
-                          <span className="mx-2">•</span>
-                          <span>{Math.round(resume.fileSize / 1024)} KB</span>
-                          {resume.isDefault && (
-                            <>
-                              <span className="mx-2">•</span>
-                              <span className="text-blue-400">Default</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex space-x-3">
-                      {!resume.isDefault && (
-                        <button 
-                          onClick={() => handleSetDefaultResume(resume.id)}
-                          className="btn-secondary text-xs px-3 py-1 rounded-md"
-                          disabled={isLoading}
-                        >
-                          Set as Default
-                        </button>
-                      )}
-                      <button 
-                        onClick={() => handleDeleteResume(resume.id)}
-                        className="text-red-400 hover:text-red-300 text-xs px-3 py-1 rounded-md border border-red-800/30 hover:border-red-700/50 bg-red-900/20"
-                        disabled={isLoading}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
