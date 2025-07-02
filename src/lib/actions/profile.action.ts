@@ -108,14 +108,41 @@ export async function updateUserProfile(data: ProfileUpdatePayload): Promise<{ s
  * Save a resume to the user profile
  */
 export async function saveResume(resumeData: Omit<SavedResume, "id" | "dateUploaded">): Promise<{ success: boolean; resumeId?: string; error?: string }> {
+  // Skip during build/prerender
+  if (process.env.NEXT_PHASE === 'phase-production-build' || 
+      process.env.NEXT_PHASE === 'phase-export') {
+    console.log('Build/export mode detected in saveResume, returning mock success');
+    return { success: true, resumeId: 'build-mock-id' };
+  }
+  
+  console.log('Starting saveResume with data:', {
+    name: resumeData.name,
+    fileName: resumeData.fileName,
+    fileSize: resumeData.fileSize,
+    isDefault: resumeData.isDefault,
+    contentLength: resumeData.content?.length || 0
+  });
+  
   try {
     const user = await getCurrentUser();
     if (!user) {
+      console.log('saveResume: No authenticated user found');
       return { success: false, error: "Not authenticated" };
     }
+    console.log('saveResume: User found', user.id);
 
-    // Create a resume document
+    // Create a resume document with validation
     const resumeId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    
+    // Validate resume data
+    if (!resumeData.content) {
+      return { success: false, error: "Resume content is missing" };
+    }
+    
+    if (resumeData.content.length < 100) {
+      return { success: false, error: "Resume content is too short or incomplete" };
+    }
+    
     const resume: SavedResume = {
       ...resumeData,
       id: resumeId,
@@ -127,15 +154,28 @@ export async function saveResume(resumeData: Omit<SavedResume, "id" | "dateUploa
     const profileDoc = await profileRef.get();
     
     if (!profileDoc.exists) {
+      console.log('saveResume: User profile not found');
       return { success: false, error: "User profile not found" };
     }
+    console.log('saveResume: Profile found, updating...');
     
-    // Add resume to saved resumes array
-    const { FieldValue } = require('firebase-admin').firestore;
-    await profileRef.update({
-      savedResumes: FieldValue.arrayUnion(resume),
-      updatedAt: new Date().toISOString()
-    });
+    // Add resume to saved resumes array using a different approach
+    try {
+      // Get current data first
+      const profileData = profileDoc.data() as Record<string, any>;
+      const currentResumes = profileData.savedResumes || [];
+      
+      // Update with push instead of arrayUnion
+      await profileRef.update({
+        savedResumes: [...currentResumes, resume],
+        updatedAt: new Date().toISOString()
+      });
+      
+      console.log('saveResume: Resume added to profile');
+    } catch (updateError) {
+      console.error('saveResume: Error updating profile:', updateError);
+      return { success: false, error: "Failed to save resume to profile" };
+    }
 
     // If this is the first resume or isDefault is true, set it as default
     const profile = profileDoc.data() as UserProfile;

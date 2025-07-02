@@ -9,12 +9,30 @@ export interface ResumeValidationResult {
   suggestions?: string[];
 }
 
+// Helper to determine if we're running during build/deployment
+const isBuildOrPrerender = () => {
+  return process.env.NEXT_PHASE === 'phase-production-build' || 
+         process.env.NEXT_PHASE === 'phase-export' ||
+         process.env.NEXT_PUBLIC_SKIP_FIREBASE_INIT === 'true';
+}
+
 export async function validateResumeContent(resumeText: string): Promise<ResumeValidationResult> {
+  // Skip AI validation during build/deployment or if text is too long
+  if (isBuildOrPrerender() || resumeText.length > 100000) {
+    console.log('Skipping AI validation, using fallback validation');
+    return fallbackResumeValidation(resumeText);
+  }
+
   try {
+    // Limit the amount of text sent to the AI to prevent token limits
+    const truncatedText = resumeText.length > 50000 ? 
+      resumeText.substring(0, 50000) + "... [TRUNCATED]" : 
+      resumeText;
+    
     const validationPrompt = `You are an expert document classifier specializing in resume/CV identification. Analyze the following document content and determine if it's a legitimate resume/CV.
 
 DOCUMENT CONTENT:
-${resumeText}
+${truncatedText}
 
 ANALYSIS INSTRUCTIONS:
 Determine if this document is a resume/CV by checking for:

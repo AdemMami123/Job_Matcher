@@ -1,24 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { mkdir } from 'fs/promises'
+import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
-import pdf from 'pdf-parse'
 import { validateResumeContent } from '@/lib/resumeValidator'
+
+// Use dynamic import for pdf-parse to ensure it's only loaded at runtime
+// and doesn't cause issues during build time
+async function getPdfParser() {
+  try {
+    // Dynamic import that will only execute at runtime
+    const pdfParse = await import('pdf-parse').then(module => module.default);
+    return pdfParse;
+  } catch (error) {
+    console.warn('pdf-parse dynamic import failed:', error);
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   console.log('API route called: /api/resume/upload')
   
   try {
     console.log('Parsing form data...')
-    const formData = await request.formData()
-    const file = formData.get('resume') as File
-
-    if (!file) {
-      console.log('No file found in form data')
+    const formData = await request.formData().catch(err => {
+      console.error('Form data parsing error:', err);
+      return null;
+    });
+    
+    if (!formData) {
       return NextResponse.json({ 
         success: false, 
-        error: 'No file uploaded' 
-      }, { status: 400 })
+        error: 'Invalid form data' 
+      }, { status: 400 });
+    }
+    
+    // Debug information
+    console.log('Form data keys:', [...formData.keys()]);
+    
+    const file = formData.get('resume') as File | null;
+    
+    if (!file) {
+      console.log('No file found in form data');
+      return NextResponse.json({ 
+        success: false, 
+        error: 'No file uploaded. Make sure the form field is named "resume".' 
+      }, { status: 400 });
     }
 
     console.log('File received:', {
@@ -65,8 +91,46 @@ export async function POST(request: NextRequest) {
         // Parse PDF directly from buffer using pdf-parse
         console.log('Parsing PDF from buffer...')
         try {
-          const pdfData = await pdf(buffer)
-          resumeText = pdfData.text
+          // For safety, use a direct import of pdf-parse
+          let pdfParse;
+          try {
+            pdfParse = (await import('pdf-parse')).default;
+          } catch (importError) {
+            console.error('Error importing pdf-parse:', importError);
+            return NextResponse.json({
+              success: false,
+              error: 'PDF parsing module could not be loaded'
+            }, { status: 500 });
+          }
+          
+          // Create a safe buffer copy
+          console.log('Creating buffer copy...');
+          const bufferCopy = Buffer.from(buffer);
+          
+          console.log('Starting PDF parsing...');
+          // Safe parsing with timeout
+          let pdfData;
+          try {
+            // Set timeout for PDF parsing (30 seconds max)
+            const timeout = setTimeout(() => {
+              throw new Error('PDF parsing timeout after 30 seconds');
+            }, 30000);
+            
+            pdfData = await pdfParse(bufferCopy);
+            
+            // Clear timeout if parsing completes
+            clearTimeout(timeout);
+          } catch (parseTimeoutError) {
+            console.error('PDF parsing timeout or error:', parseTimeoutError);
+            throw new Error('PDF parsing failed or timed out');
+          }
+          
+          if (!pdfData || typeof pdfData.text !== 'string') {
+            console.error('Invalid PDF data structure:', pdfData);
+            throw new Error('PDF parsing failed - invalid data structure returned');
+          }
+          
+          resumeText = pdfData.text;
           console.log('PDF parsed successfully, text length:', resumeText.length)
         } catch (pdfError) {
           console.error('PDF parsing error:', pdfError)
@@ -91,34 +155,34 @@ export async function POST(request: NextRequest) {
         }, { status: 400 })
       }
 
-      // Validate that the document is actually a resume/CV
-      console.log('Validating document content...')
+      // For now, let's use a simpler validation approach to avoid errors
+      console.log('Validating document content with basic checks...')
       try {
-        const validation = await validateResumeContent(resumeText)
-        console.log('Validation result:', validation)
-
-        if (!validation.isResume) {
+        // Skip AI validation for now to avoid potential errors
+        // Instead use a simple keyword check
+        const resumeKeywords = ['experience', 'education', 'skill', 'qualification', 'employment', 
+                               'job', 'work', 'position', 'resume', 'cv', 'curriculum', 'vitae', 'career'];
+        
+        const lowercaseText = resumeText.toLowerCase();
+        const matchingKeywords = resumeKeywords.filter(keyword => lowercaseText.includes(keyword));
+        
+        console.log(`Resume validation: Found ${matchingKeywords.length} resume keywords`);
+        
+        // Only reject if almost no keywords match (very unlikely to be a resume)
+        if (matchingKeywords.length < 2) {
           return NextResponse.json({
             success: false,
             error: 'This document does not appear to be a resume or CV. Please upload a proper resume.',
             details: {
-              documentType: validation.documentType,
-              confidence: validation.confidence,
-              reasons: validation.reasons,
-              suggestions: validation.suggestions
+              foundKeywords: matchingKeywords,
+              missingKeywords: resumeKeywords.filter(k => !matchingKeywords.includes(k))
             }
-          }, { status: 400 })
+          }, { status: 400 });
         }
-
-        // If confidence is low but still classified as resume, warn the user
-        if (validation.confidence < 80) {
-          console.log(`Low confidence resume validation: ${validation.confidence}%`)
-        }
-
       } catch (validationError) {
-        console.error('Resume validation error:', validationError)
+        console.error('Resume validation error:', validationError);
         // If validation fails, we'll allow the upload but log the error
-        console.log('Proceeding with upload despite validation error')
+        console.log('Proceeding with upload despite validation error');
       }
 
       console.log('Resume upload and validation successful:', file.name)

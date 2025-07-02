@@ -142,46 +142,112 @@ export default function UserProfileComponent({ initialProfile }: UserProfileProp
     setMessage({ text: '', type: '' })
     
     try {
+      // Validate file type first
+      if (!file.type.includes('pdf')) {
+        setMessage({ text: 'Only PDF files are supported', type: 'error' });
+        setIsLoading(false);
+        return;
+      }
+      
+      // Validate file size
+      const maxSize = 5 * 1024 * 1024; // 5MB
+      if (file.size > maxSize) {
+        setMessage({ text: 'File size must be less than 5MB', type: 'error' });
+        setIsLoading(false);
+        return;
+      }
+      
       const formData = new FormData()
       formData.append('resume', file)
       
-      const response = await fetch('/api/resume/upload', {
-        method: 'POST',
-        body: formData,
-      })
+      console.log('Uploading file:', file.name, file.type, file.size);
       
-      const data = await response.json()
-      
-      if (data.success && data.resumeText) {
-        // Save the resume to user profile
-        const saveResult = await saveResume({
-          name: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
-          content: data.resumeText,
-          fileSize: file.size,
-          fileName: file.name,
-          isDefault: profile?.savedResumes.length === 0, // Make default if it's the first resume
-        })
+      try {
+        const response = await fetch('/api/resume/upload', {
+          method: 'POST',
+          body: formData,
+        });
         
-        if (saveResult.success) {
-          // Refresh the profile data
-          const updatedProfile = await fetch('/api/user/profile').then(res => res.json())
-          if (updatedProfile.success) {
-            setProfile(updatedProfile.profile)
-            setMessage({ text: 'Resume uploaded and saved successfully!', type: 'success' })
+        // Handle network errors
+        if (!response) {
+          throw new Error('Network response was not available');
+        }
+        
+        let data;
+        try {
+          data = await response.json();
+        } catch (jsonError) {
+          console.error('Error parsing JSON response:', jsonError);
+          throw new Error('Invalid response format from server');
+        }
+        
+        if (!response.ok) {
+          console.error('Resume upload API error:', { status: response.status, data });
+          let errorMessage = `Upload failed (${response.status})`;
+          if (data && data.error) {
+            errorMessage += `: ${data.error}`;
+          }
+          throw new Error(errorMessage);
+        }
+        
+        if (data.success && data.resumeText) {
+          console.log('Resume text extracted successfully, length:', data.resumeText.length);
+          
+          // Save the resume to user profile
+          try {
+            const saveResult = await saveResume({
+              name: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
+              content: data.resumeText,
+              fileSize: file.size,
+              fileName: file.name,
+              isDefault: profile?.savedResumes?.length === 0, // Make default if it's the first resume
+            });
+            
+            if (saveResult.success) {
+              // Refresh the profile data
+              try {
+                const profileResponse = await fetch('/api/user/profile');
+                const updatedProfile = await profileResponse.json();
+                if (updatedProfile.success) {
+                  setProfile(updatedProfile.profile);
+                  setMessage({ text: 'Resume uploaded and saved successfully!', type: 'success' });
+                } else {
+                  console.warn('Profile refresh failed after resume save:', updatedProfile);
+                  // Still show success since we did save the resume
+                  setMessage({ text: 'Resume uploaded successfully! Refresh to see changes.', type: 'success' });
+                }
+              } catch (profileError) {
+                console.error('Error refreshing profile after resume save:', profileError);
+                // Still show success since we did save the resume
+                setMessage({ text: 'Resume uploaded successfully! Refresh to see changes.', type: 'success' });
+              }
+            } else {
+              setMessage({ text: saveResult.error || 'Failed to save resume', type: 'error' });
+            }
+          } catch (saveError) {
+            console.error('Error in saveResume:', saveError);
+            setMessage({ text: saveError instanceof Error ? saveError.message : 'Failed to save resume to your profile', type: 'error' });
           }
         } else {
-          setMessage({ text: saveResult.error || 'Failed to save resume', type: 'error' })
+          setMessage({ text: data.error || 'Failed to upload resume', type: 'error' });
         }
-      } else {
-        setMessage({ text: data.error || 'Failed to upload resume', type: 'error' })
+      } catch (error) {
+        console.error('Error uploading resume:', error);
+        const errorMessage = error instanceof Error ? `Error uploading resume: ${error.message}` : 'An error occurred while uploading your resume';
+        setMessage({ text: errorMessage, type: 'error' });
+        
+        // If the error is related to server connection, suggest checking internet connection
+        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
+          setMessage({ text: 'Network error. Please check your internet connection and try again.', type: 'error' });
+        }
       }
     } catch (error) {
-      console.error('Error uploading resume:', error)
-      setMessage({ text: 'An error occurred while uploading your resume', type: 'error' })
+      console.error('Error in resume upload process:', error);
+      setMessage({ text: 'An error occurred while uploading your resume', type: 'error' });
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
       // Reset file input
-      e.target.value = ''
+      e.target.value = '';
     }
   }
 
